@@ -8,6 +8,7 @@ import ko_pron
 from g2pk2 import G2p
 import importlib
 import os
+import threading
 from typing import List
 from ..SymbolsV2 import symbols_v2, symbol_to_id_v2
 
@@ -141,6 +142,7 @@ _ipa_to_lazy_ipa = [
 ]
 
 _g2p = G2p()
+_g2p_lock = threading.Lock()
 
 class KoreanG2P:
     """
@@ -304,7 +306,8 @@ class KoreanG2P:
 
         text = KoreanG2P._latin_to_hangul(text)
         text = KoreanG2P._number_to_hangul(text)
-        text = _g2p(text)
+        with _g2p_lock:
+            text = _g2p(text)
         text = KoreanG2P._divide_hangul(text)
         text = KoreanG2P._fix_g2pk2_error(text)
         text = re.sub(r"([\u3131-\u3163])$", r"\1.", text)
