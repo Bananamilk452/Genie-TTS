@@ -6,19 +6,29 @@ import threading
 
 import numpy as np
 import wave
-from typing import Optional, List, Callable
+from dataclasses import dataclass
+from typing import Optional, List, Callable, TYPE_CHECKING
 import logging
 
 from ..Utils.TextSplitter import TextSplitter
 from ..Core.Inference import tts_client
 from ..ModelManager import model_manager
-from ..Utils.Shared import context
 from ..Utils.Utils import clear_queue
+
+if TYPE_CHECKING:
+    from ..Audio.ReferenceAudio import ReferenceAudio
 
 logger = logging.getLogger(__name__)
 
-STREAM_END = 'STREAM_END'  # 这是一个特殊的标记，表示文本流结束
-AUDIO_STREAM_END = 'AUDIO_STREAM_END'  # 新增：特殊的标记，表示音频流播放结束
+STREAM_END = 'STREAM_END'
+AUDIO_STREAM_END = 'AUDIO_STREAM_END'
+
+
+@dataclass
+class _TextItem:
+    sentence: str
+    prompt_audio: Optional['ReferenceAudio']
+    speaker: str
 
 
 class TTSPlayer:
@@ -34,7 +44,7 @@ class TTSPlayer:
 
         self._stop_event: threading.Event = threading.Event()
         self._tts_done_event: threading.Event = threading.Event()
-        self._playback_done_event: threading.Event = threading.Event()  # 新增：用于标记播放完成
+        self._playback_done_event: threading.Event = threading.Event()
         self._api_lock: threading.Lock = threading.Lock()
 
         self._tts_worker: Optional[threading.Thread] = None
@@ -47,46 +57,50 @@ class TTSPlayer:
 
         self._chunk_callback: Optional[Callable[[Optional[bytes]], None]] = None
 
+        self._current_prompt_audio: Optional['ReferenceAudio'] = None
+        self._current_speaker: str = ''
+
     @staticmethod
     def _preprocess_for_playback(audio_float: np.ndarray) -> bytes:
         audio_int16 = (audio_float.squeeze() * 32767).astype(np.int16)
         return audio_int16.tobytes()
 
     def _tts_worker_loop(self):
-        """从文本队列取句子，生成音频，并通过回调函数或音频队列分发。"""
         while not self._stop_event.is_set():
             try:
-                sentence = self._text_queue.get(timeout=1)
-                if sentence is None or self._stop_event.is_set():
+                item = self._text_queue.get(timeout=1)
+                if item is None or self._stop_event.is_set():
                     break
             except queue.Empty:
                 continue
 
             try:
-                if sentence is STREAM_END:
+                if item is STREAM_END:
                     if self._current_save_path and self._session_audio_chunks:
                         self._save_session_audio()
 
-                    # 在TTS工作线程完成时，通过回调发送结束信号
                     if self._chunk_callback:
                         self._chunk_callback(None)
 
-                    # 新增：如果开启了播放，通知音频队列流已结束
                     if self._play:
                         self._audio_queue.put(AUDIO_STREAM_END)
 
                     self._tts_done_event.set()
                     continue
 
-                gsv_model = model_manager.get(context.current_speaker)
-                if not gsv_model or not context.current_prompt_audio:
+                sentence = item.sentence
+                prompt_audio = item.prompt_audio
+                speaker = item.speaker
+
+                gsv_model = model_manager.get(speaker)
+                if not gsv_model or not prompt_audio:
                     logger.error("Missing model or reference audio.")
                     continue
 
                 tts_client.stop_event.clear()
                 audio_chunk = tts_client.tts(
                     text=sentence,
-                    prompt_audio=context.current_prompt_audio,
+                    prompt_audio=prompt_audio,
                     encoder=gsv_model.T2S_ENCODER,
                     first_stage_decoder=gsv_model.T2S_FIRST_STAGE_DECODER,
                     stage_decoder=gsv_model.T2S_STAGE_DECODER,
@@ -166,11 +180,16 @@ class TTSPlayer:
             play: bool = False,
             split: bool = False,
             save_path: Optional[str] = None,
-            chunk_callback: Optional[Callable[[Optional[bytes]], None]] = None
+            chunk_callback: Optional[Callable[[Optional[bytes]], None]] = None,
+            current_speaker: str = '',
+            current_prompt_audio: Optional['ReferenceAudio'] = None,
     ):
         with self._api_lock:
+            self._current_speaker = current_speaker
+            self._current_prompt_audio = current_prompt_audio
+
             self._tts_done_event.clear()
-            self._playback_done_event.clear()  # 新增：重置播放完成事件
+            self._playback_done_event.clear()
             self._chunk_callback = chunk_callback
             self._stop_event.clear()
 
@@ -194,12 +213,14 @@ class TTSPlayer:
         with self._api_lock:
             if not text_chunk:
                 return
+            prompt_audio = self._current_prompt_audio
+            speaker = self._current_speaker
             if self._split:
                 sentences = self._text_splitter.split(text_chunk.strip())
                 for sentence in sentences:
-                    self._text_queue.put(sentence)
+                    self._text_queue.put(_TextItem(sentence, prompt_audio, speaker))
             else:
-                self._text_queue.put(text_chunk)
+                self._text_queue.put(_TextItem(text_chunk, prompt_audio, speaker))
 
     def end_session(self):
         with self._api_lock:

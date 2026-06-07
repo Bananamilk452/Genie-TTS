@@ -235,8 +235,7 @@ async def tts_async(
         loop.call_soon_threadsafe(stream_queue.put_nowait, c)
 
     # 设置 TTS 上下文
-    context.current_speaker = character_name
-    context.current_prompt_audio = ReferenceAudio(
+    prompt_audio = ReferenceAudio(
         prompt_wav=_reference_audios[character_name]['audio_path'],
         prompt_text=_reference_audios[character_name]['audio_text'],
         language=_reference_audios[character_name]['language'],
@@ -248,6 +247,8 @@ async def tts_async(
         split=split_sentence,
         save_path=save_path,
         chunk_callback=tts_chunk_callback,
+        current_speaker=character_name,
+        current_prompt_audio=prompt_audio,
     )
 
     # 馈送文本并通知会话结束
@@ -292,8 +293,7 @@ def tts(
         if parent_dir:
             os.makedirs(parent_dir, exist_ok=True)
 
-    context.current_speaker = character_name
-    context.current_prompt_audio = ReferenceAudio(
+    prompt_audio = ReferenceAudio(
         prompt_wav=_reference_audios[character_name]['audio_path'],
         prompt_text=_reference_audios[character_name]['audio_text'],
         language=_reference_audios[character_name]['language'],
@@ -303,6 +303,8 @@ def tts(
         play=play,
         split=split_sentence,
         save_path=save_path,
+        current_speaker=character_name,
+        current_prompt_audio=prompt_audio,
     )
     tts_player.feed(text)
     tts_player.end_session()

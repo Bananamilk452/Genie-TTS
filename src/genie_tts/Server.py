@@ -11,7 +11,6 @@ from pydantic import BaseModel
 from .Audio.ReferenceAudio import ReferenceAudio
 from .Core.TTSPlayer import tts_player
 from .ModelManager import model_manager
-from .Utils.Shared import context
 from .Utils.Language import normalize_language
 
 logger = logging.getLogger(__name__)
@@ -92,8 +91,7 @@ def run_tts_in_background(
         chunk_callback: Callable[[Optional[bytes]], None]
 ):
     try:
-        context.current_speaker = character_name
-        context.current_prompt_audio = ReferenceAudio(
+        prompt_audio = ReferenceAudio(
             prompt_wav=_reference_audios[character_name]['audio_path'],
             prompt_text=_reference_audios[character_name]['audio_text'],
             language=_reference_audios[character_name]['language'],
@@ -103,6 +101,8 @@ def run_tts_in_background(
             split=split_sentence,
             save_path=save_path,
             chunk_callback=chunk_callback,
+            current_speaker=character_name,
+            current_prompt_audio=prompt_audio,
         )
         tts_player.feed(text)
         tts_player.end_session()
